@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="ru">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Проверка окна CRM</title>
+<style>
+  body { font: 16px/1.45 system-ui, sans-serif; margin: 16px; max-width: 760px; color: #1d1d1f; background: #fff; }
+  h1 { font-size: 20px; } h2 { font-size: 17px; margin-top: 22px; }
+  .note { color: #555; } .row { margin: 6px 0; } button, a.btn { font: inherit; padding: 6px 10px; margin: 4px 6px 4px 0; }
+  .ok::before { content: '✅ '; } .bad::before { content: '❌ '; } .wait::before { content: '⏳ '; }
+  .bad { color: #b00020; font-weight: 600; } code { font-size: 13px; }
+</style>
+<h1>Проверка окна CRM — синтетическая страница</h1>
+<p class="note">Это не CRM и не данные. Страница проверяет, что окно CRM в программе SAinst Practice не может трогать сейф и программу. Ничего никуда не отправляет: результат только на этом экране. Проверка B1 №7 (SAinst Practice, тестовая сборка).</p>
+
+<h2>1. Доступ к сейфу и командам программы (проверяется сам)</h2>
+<div id="ipc-total" class="row wait">Проверяю…</div>
+<details><summary>Подробно</summary><div id="ipc"></div></details>
+
+<h2>2. Данные этого окна</h2>
+<div id="mark" class="row"></div>
+<p class="note">Сейчас страница оставила свою метку. Нажмите в программе «Выйти и очистить данные окна CRM», затем снова «Открыть CRM»: здесь должно быть «меток прошлого открытия нет».</p>
+
+<h2>3. Переходы и новые окна (нажимайте по очереди)</h2>
+<div class="row"><button id="ext-open">Открыть внешний сайт в новом окне</button> → должен открыться ваш обычный браузер; это окно остаётся.</div>
+<div class="row"><a class="btn" id="ext-link" href="https://example.com/sainst-check-link" target="_blank" rel="noopener">Внешняя ссылка в новой вкладке</a> → ваш обычный браузер; это окно остаётся.</div>
+<div class="row"><button id="ext-nav">Перейти на внешний сайт в этом окне</button> → ваш обычный браузер; эта страница остаётся.</div>
+<div class="row"><button id="app-nav">Открыть программу внутри этого окна</button> → ничего не происходит, эта страница остаётся.</div>
+<div class="row"><button id="app-open">Открыть программу в новом окне</button> → нового окна нет.</div>
+<div class="row"><button id="same-nav">Соседняя страница этого же адреса (контроль)</button> → открывается страница «Соседняя страница открылась».</div>
+<div id="nav" class="row"></div>
+
+<script>
+'use strict';
+const $ = (id) => document.getElementById(id);
+const line = (box, cls, text) => { const d = document.createElement('div'); d.className = 'row ' + cls; d.textContent = text; box.append(d); return d; };
+
+// 1. Every command must be refused by the access rules or have no channel at all; any success is a failure.
+(async () => {
+  const box = $('ipc');
+  const T = window.__TAURI_INTERNALS__;
+  line(box, 'ok', T ? 'Канал программы есть, но команды должны получать отказ' : 'Канала к программе нет');
+  const calls = [['vault_read', {}], ['vault_write_atomic', { bytes: [83, 65, 80, 86], expected: null }], ['vault_backup_save', { date: '2026-01-01' }],
+    ['vault_backup_pick', {}], ['hello_status', {}], ['hello_unlock', {}], ['hello_forget', {}], ['crm_open', {}], ['crm_close', {}],
+    ['crm_clear_profile', {}], ['plugin:updater|check', {}], ['plugin:process|restart', {}], ['plugin:opener|open_url', { url: 'https://example.com/' }],
+    ['plugin:dialog|open', {}], ['plugin:dialog|save', {}]];
+  let bad = 0;
+  for (const [cmd, args] of calls) {
+    if (!T) { line(box, 'ok', cmd + ': канала нет'); continue; }
+    try { await T.invoke(cmd, args); bad++; line(box, 'bad', cmd + ': ВЫПОЛНЕНО — так быть не должно'); }
+    catch (e) { line(box, 'ok', cmd + ': отказ').title = String(e && e.message || e); }
+  }
+  for (const u of ['ipc://localhost/vault_read', 'http://ipc.localhost/vault_read']) {
+    try {
+      const r = await fetch(u, { method: 'POST', body: '{}' });
+      if (r.ok) { bad++; line(box, 'bad', u + ': ответ ' + r.status + ' — так быть не должно'); }
+      else line(box, 'ok', u + ': отказ ' + r.status);
+    } catch (e) { line(box, 'ok', u + ': недоступно'); }
+  }
+  const total = $('ipc-total');
+  total.className = 'row ' + (bad ? 'bad' : 'ok');
+  total.textContent = bad ? 'ЕСТЬ НАРУШЕНИЯ: ' + bad + ' — откройте «Подробно» и сообщите' : 'Всё закрыто: окно CRM не может обратиться к сейфу и программе (' + (calls.length + 2) + ' проверок)';
+})();
+
+// 2. What this window's own storage already holds, then a new mark.
+(() => {
+  const prev = localStorage.getItem('sainst-check-mark');
+  const cookie = document.cookie.includes('sainst-check-mark=');
+  $('mark').className = 'row';
+  $('mark').textContent = prev || cookie
+    ? 'Метка прошлого открытия найдена (' + (prev || 'cookie') + '). Нормально, если вы не очищали данные окна; после очистки её быть не должно.'
+    : 'Меток прошлого открытия нет.';
+  const now = new Date().toLocaleString('ru-RU');
+  localStorage.setItem('sainst-check-mark', now);
+  document.cookie = 'sainst-check-mark=1; max-age=86400; path=/; secure';
+})();
+
+// 3. Navigation attempts: the page must still be here afterwards (except the same-address control).
+const stay = (what, go) => {
+  const before = location.href;
+  const d = line($('nav'), 'wait', what + ': проверяю…');
+  try { go(); } catch (e) { /* refused right away */ }
+  setTimeout(() => { if (location.href === before) { d.className = 'row ok'; d.textContent = what + ': страница осталась на месте'; } }, 2500);
+};
+$('ext-open').onclick = () => stay('Внешний сайт в новом окне', () => window.open('https://example.com/sainst-check-open'));
+$('ext-link').onclick = () => line($('nav'), 'ok', 'Внешняя ссылка нажата: страница осталась на месте');
+$('ext-nav').onclick = () => stay('Внешний сайт в этом окне', () => { location.href = 'https://example.com/sainst-check-nav'; });
+$('app-nav').onclick = () => stay('Программа внутри окна', () => { location.href = navigator.userAgent.includes('Windows') ? 'http://tauri.localhost/' : 'tauri://localhost/'; });
+$('app-open').onclick = () => stay('Программа в новом окне (посмотрите: нового окна быть не должно)', () => window.open('http://tauri.localhost/'));
+$('same-nav').onclick = () => { location.href = 'page2.html'; };
+</script>
+</html>
